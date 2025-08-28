@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+const (
+	// TimeFormat 统一的时间格式
+	TimeFormat = "2006-01-02 15:04:05"
+)
+
 // Client 表示registry客户端
 type Client struct {
 	registryURL string
@@ -508,7 +513,7 @@ func (c *Client) fetchImagesFromRegistry(platform string) ([]Image, error) {
 						// 解析时间戳
 						if manifest.Created != "" {
 							// 尝试解析时间戳
-							if t, err := time.Parse("2006-01-02 15:04:05", manifest.Created); err == nil {
+							if t, err := time.Parse(TimeFormat, manifest.Created); err == nil {
 								if latestTime.IsZero() || t.After(latestTime) {
 									latestTime = t
 									latestTags = []string{tag}
@@ -569,7 +574,7 @@ func (c *Client) fetchImagesFromRegistry(platform string) ([]Image, error) {
 						// 解析时间戳
 						if manifest.Created != "" {
 							// 尝试解析时间戳
-							if t, err := time.Parse("2006-01-02 15:04:05", manifest.Created); err == nil {
+							if t, err := time.Parse(TimeFormat, manifest.Created); err == nil {
 								if latestTime.IsZero() || t.After(latestTime) {
 									latestTime = t
 									latestTags = []string{tag}
@@ -681,7 +686,8 @@ func (c *Client) getImageManifest(repository, tag string) (*Manifest, error) {
 	// 添加认证头和Accept头
 	auth := base64.StdEncoding.EncodeToString([]byte(c.credentials.Username + ":" + c.credentials.Password))
 	req.Header.Set("Authorization", "Basic "+auth)
-	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json")
+	// 支持多种manifest格式，根据返回的Content-Type决定解析方法
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v1+prettyjws, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json")
 	
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -698,6 +704,9 @@ func (c *Client) getImageManifest(repository, tag string) (*Manifest, error) {
 	if digest == "" {
 		digest = "unknown"
 	}
+	
+	// 获取响应的Content-Type
+	contentType := resp.Header.Get("Content-Type")
 	
 	// 解析清单获取大小和创建时间
 	var manifestData map[string]interface{}
@@ -743,9 +752,8 @@ func (c *Client) getImageManifest(repository, tag string) (*Manifest, error) {
 		}
 	}
 	
-	// 格式化当前时间为本地时间
-	now := time.Now()
-	created := now.Format("2006-01-02 15:04:05")
+	// 根据实际的Content-Type获取创建时间
+	created := c.getImageCreatedTimeByContentType(repository, manifestData, contentType)
 	
 	return &Manifest{
 		Digest: digest,
@@ -766,7 +774,8 @@ func (c *Client) getArchitectureManifestSize(repository, digest string) int64 {
 	// 添加认证头
 	auth := base64.StdEncoding.EncodeToString([]byte(c.credentials.Username + ":" + c.credentials.Password))
 	req.Header.Set("Authorization", "Basic "+auth)
-	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json")
+	// 支持多种manifest格式
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v1+prettyjws, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json")
 	
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -805,6 +814,208 @@ func (c *Client) getArchitectureManifestSize(repository, digest string) int64 {
 	}
 	
 	return totalSize
+}
+
+// getImageCreatedTimeByContentType 根据Content-Type从manifest中获取镜像的创建时间
+func (c *Client) getImageCreatedTimeByContentType(repository string, manifestData map[string]interface{}, contentType string) string {
+	// 根据实际的Content-Type决定解析方法
+	switch contentType {
+	case "application/vnd.docker.distribution.manifest.v1+prettyjws":
+		// Docker v1格式：从history中获取创建时间
+		return c.getV1CreatedTime(manifestData)
+	case "application/vnd.docker.distribution.manifest.v2+json":
+		// Docker v2格式：从config blob中获取创建时间
+		return c.getV2CreatedTime(repository, manifestData)
+	case "application/vnd.oci.image.manifest.v1+json":
+		// OCI格式：从config blob中获取创建时间
+		return c.getV2CreatedTime(repository, manifestData)
+	case "application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.oci.image.index.v1+json":
+		// 多架构manifest：从第一个架构获取时间
+		return c.getMultiArchCreatedTime(repository, manifestData)
+	}
+	
+	// 如果没有mediaType，尝试从history字段判断是否为v1格式
+	if history, ok := manifestData["history"].([]interface{}); ok && len(history) > 0 {
+		return c.getV1CreatedTime(manifestData)
+	}
+	
+	// 如果无法获取创建时间，返回当前时间（向后兼容）
+	now := time.Now()
+	return now.Format(TimeFormat)
+}
+
+// getImageCreatedTime 从manifest中获取镜像的创建时间（向后兼容）
+func (c *Client) getImageCreatedTime(repository string, manifestData map[string]interface{}) string {
+	// 根据manifest的mediaType决定解析方法
+	if mediaType, ok := manifestData["mediaType"].(string); ok {
+		switch mediaType {
+		case "application/vnd.docker.distribution.manifest.v1+prettyjws":
+			// Docker v1格式：从history中获取创建时间
+			return c.getV1CreatedTime(manifestData)
+		case "application/vnd.docker.distribution.manifest.v2+json":
+			// Docker v2格式：从config blob中获取创建时间
+			return c.getV2CreatedTime(repository, manifestData)
+		case "application/vnd.oci.image.manifest.v1+json":
+			// OCI格式：从config blob中获取创建时间
+			return c.getV2CreatedTime(repository, manifestData)
+		case "application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.oci.image.index.v1+json":
+			// 多架构manifest：从第一个架构获取时间
+			return c.getMultiArchCreatedTime(repository, manifestData)
+		}
+	}
+	
+	// 如果没有mediaType，尝试从history字段判断是否为v1格式
+	if history, ok := manifestData["history"].([]interface{}); ok && len(history) > 0 {
+		return c.getV1CreatedTime(manifestData)
+	}
+	
+	// 如果无法获取创建时间，返回当前时间（向后兼容）
+	now := time.Now()
+	return now.Format(TimeFormat)
+}
+
+// getV1CreatedTime 从Docker v1格式manifest获取创建时间
+func (c *Client) getV1CreatedTime(manifestData map[string]interface{}) string {
+	if history, ok := manifestData["history"].([]interface{}); ok && len(history) > 0 {
+		// 获取第一个history条目（最新的层）
+		if firstHistory, ok := history[0].(map[string]interface{}); ok {
+			if v1Compat, ok := firstHistory["v1Compatibility"].(string); ok {
+				// 解析v1Compatibility JSON字符串
+				var v1Data map[string]interface{}
+				if err := json.Unmarshal([]byte(v1Compat), &v1Data); err == nil {
+					if created, ok := v1Data["created"].(string); ok && created != "" {
+						// 尝试解析时间戳
+						if t, err := time.Parse(time.RFC3339, created); err == nil {
+							return t.Format(TimeFormat)
+						}
+						// 如果RFC3339格式失败，尝试其他格式
+						if t, err := time.Parse("2006-01-02T15:04:05Z", created); err == nil {
+							return t.Format(TimeFormat)
+						}
+						// 如果已经是本地时间格式，直接返回
+						if len(created) >= 19 {
+							return created[:19]
+						}
+					}
+				}
+			}
+		}
+	}
+	return time.Now().Format(TimeFormat)
+}
+
+// getV2CreatedTime 从Docker v2/OCI格式manifest获取创建时间
+func (c *Client) getV2CreatedTime(repository string, manifestData map[string]interface{}) string {
+	if config, ok := manifestData["config"].(map[string]interface{}); ok {
+		if digest, ok := config["digest"].(string); ok {
+			// 获取config blob来解析创建时间
+			return c.getConfigCreatedTime(repository, digest)
+		}
+	}
+	return time.Now().Format(TimeFormat)
+}
+
+// getMultiArchCreatedTime 从多架构manifest获取创建时间
+func (c *Client) getMultiArchCreatedTime(repository string, manifestData map[string]interface{}) string {
+	if manifests, ok := manifestData["manifests"].([]interface{}); ok && len(manifests) > 0 {
+		if firstManifest, ok := manifests[0].(map[string]interface{}); ok {
+			if digest, ok := firstManifest["digest"].(string); ok {
+				// 获取第一个架构的manifest来获取创建时间
+				return c.getArchitectureCreatedTime(repository, digest)
+			}
+		}
+	}
+	return time.Now().Format(TimeFormat)
+}
+
+// getArchitectureCreatedTime 获取单个架构manifest的创建时间
+func (c *Client) getArchitectureCreatedTime(repository, digest string) string {
+	apiURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", c.registryURL, repository, digest)
+	
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return time.Now().Format(TimeFormat)
+	}
+	
+	// 添加认证头
+	auth := base64.StdEncoding.EncodeToString([]byte(c.credentials.Username + ":" + c.credentials.Password))
+	req.Header.Set("Authorization", "Basic "+auth)
+	// 支持多种manifest格式
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v1+prettyjws, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return time.Now().Format(TimeFormat)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return time.Now().Format(TimeFormat)
+	}
+	
+	// 解析manifest
+	var manifestData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&manifestData); err != nil {
+		return time.Now().Format(TimeFormat)
+	}
+	
+	// 从config中获取创建时间
+	if config, ok := manifestData["config"].(map[string]interface{}); ok {
+		if digest, ok := config["digest"].(string); ok {
+			// 获取config blob来解析创建时间
+			return c.getConfigCreatedTime(repository, digest)
+		}
+	}
+	
+	return time.Now().Format(TimeFormat)
+}
+
+// getConfigCreatedTime 从config blob获取创建时间
+func (c *Client) getConfigCreatedTime(repository, digest string) string {
+	apiURL := fmt.Sprintf("https://%s/v2/%s/blobs/%s", c.registryURL, repository, digest)
+	
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return time.Now().Format(TimeFormat)
+	}
+	
+	// 添加认证头
+	auth := base64.StdEncoding.EncodeToString([]byte(c.credentials.Username + ":" + c.credentials.Password))
+	req.Header.Set("Authorization", "Basic "+auth)
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return time.Now().Format(TimeFormat)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return time.Now().Format(TimeFormat)
+	}
+	
+	// 解析config blob
+	var configData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&configData); err != nil {
+		return time.Now().Format(TimeFormat)
+	}
+	
+	// 从config中获取创建时间
+	if created, ok := configData["created"].(string); ok && created != "" {
+		// 尝试解析时间戳
+		if t, err := time.Parse(time.RFC3339, created); err == nil {
+			return t.Format(TimeFormat)
+		}
+		// 如果RFC3339格式失败，尝试其他格式
+		if t, err := time.Parse("2006-01-02T15:04:05Z", created); err == nil {
+			return t.Format(TimeFormat)
+		}
+		// 如果已经是本地时间格式，直接返回
+		if len(created) >= 19 {
+			return created[:19]
+		}
+	}
+	
+	return time.Now().Format(TimeFormat)
 }
 
 // formatSize 格式化大小
@@ -1041,7 +1252,7 @@ func (c *Client) getRepositoryInfoWithFilters(repository, tagPattern, platformFi
 					// 解析时间戳
 					if manifest.Created != "" {
 						// 尝试解析时间戳
-						if t, err := time.Parse("2006-01-02 15:04:05", manifest.Created); err == nil {
+						if t, err := time.Parse(TimeFormat, manifest.Created); err == nil {
 							if latestTime.IsZero() || t.After(latestTime) {
 								latestTime = t
 								latestTags = []string{tag}
