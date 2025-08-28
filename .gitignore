@@ -1,0 +1,51 @@
+# 二进制文件
+docker-genee
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 测试二进制文件
+*.test
+
+# 输出目录
+bin/
+dist/
+
+# Go相关
+*.o
+*.a
+*.so
+
+# 依赖目录
+vendor/
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 配置文件（包含敏感信息）
+.env
+.env.local
+.env.*.local
+
+# 临时文件
+tmp/
+temp/
+
+build/

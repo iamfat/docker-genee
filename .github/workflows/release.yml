@@ -1,0 +1,185 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: darwin
+            arch: amd64
+            suffix: darwin-amd64
+          - os: darwin
+            arch: arm64
+            suffix: darwin-arm64
+          - os: linux
+            arch: amd64
+            suffix: linux-amd64
+          - os: linux
+            arch: arm64
+            suffix: linux-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build for ${{ matrix.os }}/${{ matrix.arch }}
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -a -installsuffix cgo -ldflags="-s -w" -o docker-genee-${{ matrix.suffix }} .
+          echo "Built docker-genee-${{ matrix.suffix }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-genee-${{ matrix.suffix }}
+          path: docker-genee-${{ matrix.suffix }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: docker-genee-*
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        run: |
+          # 生成 SHA256 校验和
+          for file in docker-genee-*; do
+            shasum -a 256 "$file" > "$file.sha256"
+            echo "生成: $file.sha256"
+          done
+
+      - name: Generate release notes
+        run: |
+          # 获取版本号
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=${VERSION#v}
+          
+          # 创建发布说明
+          cat > RELEASE_NOTES.md << EOF
+          # docker-genee v${VERSION} 发布说明
+          
+          ## 下载
+          
+          ### macOS
+          - **Intel (x86_64)**: [docker-genee-darwin-amd64](https://github.com/iamfat/docker-genee/releases/download/v${VERSION}/docker-genee-darwin-amd64)
+          - **Apple Silicon (ARM64)**: [docker-genee-darwin-arm64](https://github.com/iamfat/docker-genee/releases/download/v${VERSION}/docker-genee-darwin-arm64)
+          
+          ### Linux
+          - **AMD64 (x86_64)**: [docker-genee-linux-amd64](https://github.com/iamfat/docker-genee/releases/download/v${VERSION}/docker-genee-linux-amd64)
+          - **ARM64**: [docker-genee-linux-arm64](https://github.com/iamfat/docker-genee/releases/download/v${VERSION}/docker-genee-linux-arm64)
+          
+          ## 安装说明
+          
+          1. 下载对应平台的二进制文件
+          2. 重命名为 \`docker-genee\`
+          3. 移动到 \`~/.docker/cli-plugins/\` 目录
+          4. 设置执行权限: \`chmod +x ~/.docker/cli-plugins/docker-genee\`
+          
+          ## 使用方法
+          
+          \`\`\`bash
+          # 查看帮助
+          docker genee --help
+          
+          # 登录到私有镜像源
+          docker genee login
+          
+          # 查看镜像列表
+          docker genee images
+          
+          # 搜索镜像
+          docker genee search node
+          \`\`\`
+          
+          ## 变更日志
+          
+          请查看 [CHANGELOG.md](../../CHANGELOG.md) 了解详细变更。
+          
+          ## 校验和
+          
+          \`\`\`
+          $(for file in *.sha256; do echo "$(cat "$file")"; done)
+          \`\`\`
+          EOF
+          
+          echo "发布说明已生成: RELEASE_NOTES.md"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            docker-genee-darwin-amd64
+            docker-genee-darwin-amd64.sha256
+            docker-genee-darwin-arm64
+            docker-genee-darwin-arm64.sha256
+            docker-genee-linux-amd64
+            docker-genee-linux-amd64.sha256
+            docker-genee-linux-arm64
+            docker-genee-linux-arm64.sha256
+            RELEASE_NOTES.md
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-build:
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build current platform
+        run: |
+          go build -o docker-genee .
+
+      - name: Test binary
+        run: |
+          ./docker-genee --version
+          ./docker-genee --help
