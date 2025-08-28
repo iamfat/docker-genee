@@ -895,6 +895,13 @@ func (c *Client) searchImagesFromRegistry(query, platform string, limit int) ([]
 	// 构建搜索结果
 	var results []SearchResult
 	for i, repo := range matchedRepos {
+		// 显示进度条
+		progress := float64(i+1) / float64(len(matchedRepos))
+		barWidth := 30
+		filled := int(progress * float64(barWidth))
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+		fmt.Printf("\r搜索进度: %s %d/%d", bar, i+1, len(matchedRepos))
+		
 		// 获取仓库信息，传入标签模式、平台过滤和标签列表进行匹配
 		repoInfo, err := c.getRepositoryInfoWithFilters(repo, tagPatterns[i], platform)
 		if err != nil {
@@ -903,6 +910,9 @@ func (c *Client) searchImagesFromRegistry(query, platform string, limit int) ([]
 		
 		results = append(results, *repoInfo)
 	}
+	
+	// 清除进度条
+	fmt.Print("\r" + strings.Repeat(" ", 80) + "\r")
 	
 	return results, nil
 }
