@@ -10,7 +10,7 @@ import (
 var (
 	registryURL = "docker.genee.cn"
 	configDir   string
-	Version     = "1.0.0"
+	Version     = "1.0.1"
 )
 
 // rootCmd represents the base command when called without any subcommands

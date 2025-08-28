@@ -441,9 +441,9 @@ func (c *Client) fetchImagesFromRegistry(platform string) ([]Image, error) {
 		return nil, fmt.Errorf("解析响应失败: %v", err)
 	}
 	
-	fmt.Printf("找到 %d 个仓库，正在获取最新标签...\n", len(catalog.Repositories))
+	fmt.Printf("找到 %d 个仓库，正在提取所有标签...\n", len(catalog.Repositories))
 	
-	// 获取每个仓库的最新标签
+	// 获取每个仓库的镜像信息
 	var images []Image
 	for i, repo := range catalog.Repositories {
 		// 显示进度条
@@ -462,45 +462,170 @@ func (c *Client) fetchImagesFromRegistry(platform string) ([]Image, error) {
 			continue
 		}
 		
-		// 选择最新标签（通常是latest，如果没有则选择第一个）
-		latestTag := tags[0]
-		for _, tag := range tags {
-			if tag == "latest" {
-				latestTag = tag
-				break
+		// 如果指定了平台，检查仓库中是否有任何标签支持该平台
+		var supportedTags []string
+		if platform != "" {
+			// 检查所有标签，找出支持指定平台的标签
+			for _, tag := range tags {
+				tagPlatforms := c.GetImagePlatforms(repo, tag)
+				for _, imgPlatform := range tagPlatforms {
+					if strings.Contains(strings.ToLower(imgPlatform), strings.ToLower(platform)) {
+						supportedTags = append(supportedTags, tag)
+						break
+					}
+				}
+			}
+			
+			// 如果没有支持指定平台的标签，跳过这个仓库
+			if len(supportedTags) == 0 {
+				continue
 			}
 		}
 		
+		// 选择要显示的标签
+		var displayTag string
+		var displayPlatforms []string
+		
+		if platform != "" && len(supportedTags) > 0 {
+			// 从支持的标签中选择最佳的
+			displayTag = supportedTags[0]
+			// 优先选择 latest 标签
+			for _, tag := range supportedTags {
+				if tag == "latest" {
+					displayTag = tag
+					break
+				}
+			}
+			// 如果没有 latest，比较所有标签的时间戳，选择最新的
+			if displayTag == supportedTags[0] {
+				var latestTime time.Time
+				var latestTags []string
+				
+				// 遍历所有标签，找到时间戳最新的
+				for _, tag := range supportedTags {
+					manifest, err := c.getImageManifest(repo, tag)
+					if err == nil {
+						// 解析时间戳
+						if manifest.Created != "" {
+							// 尝试解析时间戳
+							if t, err := time.Parse("2006-01-02 15:04:05", manifest.Created); err == nil {
+								if latestTime.IsZero() || t.After(latestTime) {
+									latestTime = t
+									latestTags = []string{tag}
+								} else if t.Equal(latestTime) {
+									// 时间戳相同，添加到候选列表
+									latestTags = append(latestTags, tag)
+								}
+							}
+						}
+					}
+				}
+				
+				// 如果找到了时间戳最新的标签
+				if len(latestTags) > 0 {
+					if len(latestTags) == 1 {
+						// 只有一个最新标签
+						displayTag = latestTags[0]
+					} else {
+						// 多个标签时间戳相同，优先选择多架构标签
+						var multiArchTag string
+						for _, tag := range latestTags {
+							tagPlatforms := c.GetImagePlatforms(repo, tag)
+							if len(tagPlatforms) > 1 {
+								// 找到多架构标签，优先选择
+								multiArchTag = tag
+								break
+							}
+						}
+						
+						if multiArchTag != "" {
+							displayTag = multiArchTag
+						} else {
+							// 没有多架构标签，选择第一个
+							displayTag = latestTags[0]
+						}
+					}
+				}
+			}
+		} else {
+			// 没有平台过滤，选择最佳标签
+			displayTag = tags[0]
+			// 优先选择 latest 标签
+			for _, tag := range tags {
+				if tag == "latest" {
+					displayTag = tag
+					break
+				}
+			}
+			// 如果没有 latest，比较所有标签的时间戳，选择最新的
+			if displayTag == tags[0] {
+				var latestTime time.Time
+				var latestTags []string
+				
+				// 遍历所有标签，找到时间戳最新的
+				for _, tag := range tags {
+					manifest, err := c.getImageManifest(repo, tag)
+					if err == nil {
+						// 解析时间戳
+						if manifest.Created != "" {
+							// 尝试解析时间戳
+							if t, err := time.Parse("2006-01-02 15:04:05", manifest.Created); err == nil {
+								if latestTime.IsZero() || t.After(latestTime) {
+									latestTime = t
+									latestTags = []string{tag}
+								} else if t.Equal(latestTime) {
+									// 时间戳相同，添加到候选列表
+									latestTags = append(latestTags, tag)
+								}
+							}
+						}
+					}
+				}
+				
+				// 如果找到了时间戳最新的标签
+				if len(latestTags) > 0 {
+					if len(latestTags) == 1 {
+						// 只有一个最新标签
+						displayTag = latestTags[0]
+					} else {
+						// 多个标签时间戳相同，优先选择多架构标签
+						var multiArchTag string
+						for _, tag := range latestTags {
+							tagPlatforms := c.GetImagePlatforms(repo, tag)
+							if len(tagPlatforms) > 1 {
+								// 找到多架构标签，优先选择
+								multiArchTag = tag
+								break
+							}
+						}
+						
+						if multiArchTag != "" {
+							displayTag = multiArchTag
+						} else {
+							// 没有多架构标签，选择第一个
+							displayTag = latestTags[0]
+						}
+					}
+				}
+			}
+		}
+		
+		// 获取选中标签的平台信息
+		displayPlatforms = c.GetImagePlatforms(repo, displayTag)
+		
 		// 获取镜像详情
-		manifest, err := c.getImageManifest(repo, latestTag)
+		manifest, err := c.getImageManifest(repo, displayTag)
 		if err != nil {
 			continue
 		}
 		
-		// 获取平台信息
-		platforms := c.getImagePlatforms(repo, latestTag)
-		
-		// 如果指定了平台，检查是否匹配
-		if platform != "" {
-			platformMatched := false
-			for _, imgPlatform := range platforms {
-				if strings.Contains(strings.ToLower(imgPlatform), strings.ToLower(platform)) {
-					platformMatched = true
-					break
-				}
-			}
-			if !platformMatched {
-				continue // 跳过不匹配平台的镜像
-			}
-		}
-		
 		images = append(images, Image{
 			Repository: repo,
-			Tag:        latestTag,
+			Tag:        displayTag,
 			Digest:     manifest.Digest,
 			Size:       formatSize(manifest.Size),
 			Created:    manifest.Created,
-			Platforms:  platforms,
+			Platforms:  displayPlatforms,
 		})
 	}
 	
@@ -556,7 +681,7 @@ func (c *Client) getImageManifest(repository, tag string) (*Manifest, error) {
 	// 添加认证头和Accept头
 	auth := base64.StdEncoding.EncodeToString([]byte(c.credentials.Username + ":" + c.credentials.Password))
 	req.Header.Set("Authorization", "Basic "+auth)
-	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json")
 	
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -575,23 +700,47 @@ func (c *Client) getImageManifest(repository, tag string) (*Manifest, error) {
 	}
 	
 	// 解析清单获取大小和创建时间
-	var manifest struct {
-		Config struct {
-			Size int64 `json:"size"`
-		} `json:"config"`
-		Layers []struct {
-			Size int64 `json:"size"`
-		} `json:"layers"`
-	}
-	
-	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+	var manifestData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&manifestData); err != nil {
 		return nil, err
 	}
 	
-	// 计算总大小
-	totalSize := manifest.Config.Size
-	for _, layer := range manifest.Layers {
-		totalSize += layer.Size
+	var totalSize int64
+	
+	// 检查是否是 OCI Image Index 或 Docker Manifest List
+	if mediaType, ok := manifestData["mediaType"].(string); ok {
+		if mediaType == "application/vnd.oci.image.index.v1+json" || mediaType == "application/vnd.docker.distribution.manifest.list.v2+json" {
+			// 多架构 manifest，需要获取每个架构的实际大小
+			if manifests, ok := manifestData["manifests"].([]interface{}); ok {
+				// 对于多架构镜像，我们选择第一个架构的大小作为代表
+				// 或者计算所有架构的平均大小
+				if len(manifests) > 0 {
+					if firstManifest, ok := manifests[0].(map[string]interface{}); ok {
+						if digest, ok := firstManifest["digest"].(string); ok {
+							// 获取第一个架构的 manifest 来获取实际大小
+							archSize := c.getArchitectureManifestSize(repository, digest)
+							totalSize = archSize
+						}
+					}
+				}
+			}
+		} else {
+			// 单架构 manifest
+			if config, ok := manifestData["config"].(map[string]interface{}); ok {
+				if size, ok := config["size"].(float64); ok {
+					totalSize += int64(size)
+				}
+			}
+			if layers, ok := manifestData["layers"].([]interface{}); ok {
+				for _, layer := range layers {
+					if layerMap, ok := layer.(map[string]interface{}); ok {
+						if size, ok := layerMap["size"].(float64); ok {
+							totalSize += int64(size)
+						}
+					}
+				}
+			}
+		}
 	}
 	
 	// 格式化当前时间为本地时间
@@ -603,6 +752,59 @@ func (c *Client) getImageManifest(repository, tag string) (*Manifest, error) {
 		Size:   totalSize,
 		Created: created,
 	}, nil
+}
+
+// getArchitectureManifestSize 获取单个架构 manifest 的大小
+func (c *Client) getArchitectureManifestSize(repository, digest string) int64 {
+	apiURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", c.registryURL, repository, digest)
+	
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return 0
+	}
+	
+	// 添加认证头
+	auth := base64.StdEncoding.EncodeToString([]byte(c.credentials.Username + ":" + c.credentials.Password))
+	req.Header.Set("Authorization", "Basic "+auth)
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+	
+	// 解析 manifest 获取大小
+	var manifestData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&manifestData); err != nil {
+		return 0
+	}
+	
+	var totalSize int64
+	
+	// 获取 config 大小
+	if config, ok := manifestData["config"].(map[string]interface{}); ok {
+		if size, ok := config["size"].(float64); ok {
+			totalSize += int64(size)
+		}
+	}
+	
+	// 获取 layers 大小
+	if layers, ok := manifestData["layers"].([]interface{}); ok {
+		for _, layer := range layers {
+			if layerMap, ok := layer.(map[string]interface{}); ok {
+				if size, ok := layerMap["size"].(float64); ok {
+					totalSize += int64(size)
+				}
+			}
+		}
+	}
+	
+	return totalSize
 }
 
 // formatSize 格式化大小
@@ -693,8 +895,8 @@ func (c *Client) searchImagesFromRegistry(query, platform string, limit int) ([]
 	// 构建搜索结果
 	var results []SearchResult
 	for i, repo := range matchedRepos {
-		// 获取仓库信息，传入标签模式进行匹配
-		repoInfo, err := c.getRepositoryInfo(repo, tagPatterns[i])
+		// 获取仓库信息，传入标签模式、平台过滤和标签列表进行匹配
+		repoInfo, err := c.getRepositoryInfoWithFilters(repo, tagPatterns[i], platform)
 		if err != nil {
 			continue
 		}
@@ -748,61 +950,145 @@ func matchesQuery(repository, query string) (bool, []string) {
 	return repository == query, nil
 }
 
-// getRepositoryInfo 获取仓库信息
-func (c *Client) getRepositoryInfo(repository, tagPattern string) (*SearchResult, error) {
+// getRepositoryInfoWithFilters 获取仓库信息，支持标签和平台过滤
+func (c *Client) getRepositoryInfoWithFilters(repository, tagPattern, platformFilter string) (*SearchResult, error) {
 	// 获取标签列表
 	tags, err := c.getRepositoryTags(repository)
 	if err != nil {
 		return nil, err
 	}
 	
-	// 获取平台信息
-	platforms := c.getRepositoryPlatforms(repository, tags)
-	
-	// 计算仓库总大小和获取最新标签的详情
-	totalSize := int64(0)
-	var latestDigest, latestCreated string
-	var latestTag string
-	var matchedTags []string
-	
-	// 如果有标签模式，查找匹配的标签
+	// 步骤1: 如果有标签模式，先过滤出符合要求的标签
+	var filteredTags []string
 	if tagPattern != "" {
 		for _, tag := range tags {
 			matched := matchesTagPattern(tag, tagPattern)
 			if matched {
-				matchedTags = append(matchedTags, tag)
+				filteredTags = append(filteredTags, tag)
+			}
+		}
+		// 如果没有匹配的标签，返回错误
+		if len(filteredTags) == 0 {
+			return nil, fmt.Errorf("没有匹配的标签")
+		}
+	} else {
+		// 没有标签模式，使用所有标签
+		filteredTags = tags
+	}
+	
+	// 步骤2: 如果有平台过滤，过滤出支持该平台的标签
+	var platformSupportedTags []string
+	if platformFilter != "" {
+		for _, tag := range filteredTags {
+			tagPlatforms := c.GetImagePlatforms(repository, tag)
+			for _, imgPlatform := range tagPlatforms {
+				if strings.Contains(strings.ToLower(imgPlatform), strings.ToLower(platformFilter)) {
+					platformSupportedTags = append(platformSupportedTags, tag)
+					break
+				}
+			}
+		}
+		// 如果没有支持指定平台的标签，返回错误
+		if len(platformSupportedTags) == 0 {
+			return nil, fmt.Errorf("没有支持平台 %s 的标签", platformFilter)
+		}
+	} else {
+		// 没有平台过滤，使用过滤后的标签
+		platformSupportedTags = filteredTags
+	}
+	
+	// 步骤3: 根据是否有标签模式决定显示策略
+	var matchedTags []string
+	var selectedTag string
+	var platforms []string
+	var totalSize int64
+	var selectedDigest, selectedCreated string
+	
+	if tagPattern != "" {
+		// 指定了标签模式：显示所有匹配的标签
+		matchedTags = platformSupportedTags
+		// 选择第一个标签作为主要标签（用于显示基本信息）
+		selectedTag = platformSupportedTags[0]
+	} else {
+		// 没有标签模式：选择最佳标签
+		selectedTag = platformSupportedTags[0]
+		// 优先选择 latest 标签
+		for _, tag := range platformSupportedTags {
+			if tag == "latest" {
+				selectedTag = tag
+				break
+			}
+		}
+		// 如果没有 latest，比较所有标签的时间戳，选择最新的
+		if selectedTag == platformSupportedTags[0] {
+			var latestTime time.Time
+			var latestTags []string
+			
+			// 遍历所有标签，找到时间戳最新的
+			for _, tag := range platformSupportedTags {
+				manifest, err := c.getImageManifest(repository, tag)
+				if err == nil {
+					// 解析时间戳
+					if manifest.Created != "" {
+						// 尝试解析时间戳
+						if t, err := time.Parse("2006-01-02 15:04:05", manifest.Created); err == nil {
+							if latestTime.IsZero() || t.After(latestTime) {
+								latestTime = t
+								latestTags = []string{tag}
+							} else if t.Equal(latestTime) {
+								// 时间戳相同，添加到候选列表
+								latestTags = append(latestTags, tag)
+							}
+						}
+					}
+				}
+			}
+			
+			// 如果找到了时间戳最新的标签
+			if len(latestTags) > 0 {
+				if len(latestTags) == 1 {
+					// 只有一个最新标签
+					selectedTag = latestTags[0]
+				} else {
+					// 多个标签时间戳相同，优先选择多架构标签
+					var multiArchTag string
+					for _, tag := range latestTags {
+						tagPlatforms := c.GetImagePlatforms(repository, tag)
+						if len(tagPlatforms) > 1 {
+							// 找到多架构标签，优先选择
+							multiArchTag = tag
+							break
+						}
+					}
+					
+					if multiArchTag != "" {
+						selectedTag = multiArchTag
+					} else {
+						// 没有多架构标签，选择第一个
+						selectedTag = latestTags[0]
+					}
+				}
 			}
 		}
 	}
 	
-	// 获取最新标签（通常是latest，如果没有则选择第一个）
-	latestTag = tags[0]
-	for _, tag := range tags {
-		if tag == "latest" {
-			latestTag = tag
-			break
-		}
-	}
+	// 获取选中标签的平台信息
+	platforms = c.GetImagePlatforms(repository, selectedTag)
 	
-	// 获取标签详情
-	for i, tag := range tags {
-		if i >= 3 { // 只检查前3个标签来计算大小
+	// 计算总大小和获取标签详情
+	for i, tag := range platformSupportedTags {
+		if i >= 5 { // 限制检查的标签数量以提高性能
 			break
 		}
 		manifest, err := c.getImageManifest(repository, tag)
 		if err == nil {
 			totalSize += manifest.Size
-			// 记录最新标签的digest和created
-			if tag == latestTag {
-				latestDigest = manifest.Digest
-				latestCreated = manifest.Created
+			// 记录选中标签的digest和created
+			if tag == selectedTag {
+				selectedDigest = manifest.Digest
+				selectedCreated = manifest.Created
 			}
 		}
-	}
-	
-	// 如果有标签模式但没有匹配的标签，返回错误（这样该仓库就不会被包含在结果中）
-	if tagPattern != "" && len(matchedTags) == 0 {
-		return nil, fmt.Errorf("没有匹配的标签")
 	}
 	
 	return &SearchResult{
@@ -811,15 +1097,15 @@ func (c *Client) getRepositoryInfo(repository, tagPattern string) (*SearchResult
 		Tags:        len(tags),
 		Size:        formatSize(totalSize),
 		Platforms:   platforms,
-		Digest:      latestDigest,
-		Created:     latestCreated,
-		LatestTag:   latestTag,
+		Digest:      selectedDigest,
+		Created:     selectedCreated,
+		LatestTag:   selectedTag,
 		MatchedTags: matchedTags,
 	}, nil
 }
 
-// getImagePlatforms 获取单个镜像的平台信息
-func (c *Client) getImagePlatforms(repository, tag string) []string {
+// GetImagePlatforms 获取单个镜像的平台信息
+func (c *Client) GetImagePlatforms(repository, tag string) []string {
 	// 检查认证信息
 	if c.credentials == nil {
 		return []string{"unknown"}
@@ -833,12 +1119,12 @@ func (c *Client) getImagePlatforms(repository, tag string) []string {
 	if err != nil {
 		return []string{"unknown"}
 	}
-	
+
 	// 添加认证头
 	auth := base64.StdEncoding.EncodeToString([]byte(c.credentials.Username + ":" + c.credentials.Password))
 	req.Header.Set("Authorization", "Basic "+auth)
 	// 优先请求manifest list（多架构），如果没有则回退到单架构manifest
-	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.v1+prettyjws")
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v1+prettyjws")
 	
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -863,26 +1149,22 @@ func (c *Client) getImagePlatforms(repository, tag string) []string {
 	// 	fmt.Printf("DEBUG: %s:%s mediaType = %s\n", repository, tag, mediaType)
 	// }
 		
-		if mediaType == "application/vnd.docker.distribution.manifest.list.v2+json" {
-			// 多平台manifest
+		if mediaType == "application/vnd.docker.distribution.manifest.list.v2+json" || mediaType == "application/vnd.oci.image.index.v1+json" {
+			// 多平台manifest（Docker 或 OCI 格式）
 			if manifests, ok := manifestData["manifests"].([]interface{}); ok {
 				var platforms []string
 				for _, m := range manifests {
 					if manifest, ok := m.(map[string]interface{}); ok {
-										// 调试信息（可选）
-				// if strings.Contains(repository, "nginx") || strings.Contains(repository, "node") {
-				// 	fmt.Printf("DEBUG: %s:%s manifest[%d] keys: %v\n", repository, tag, i, getMapKeys(manifest))
-				// }
 						if platform, ok := manifest["platform"].(map[string]interface{}); ok {
-							// 调试信息（可选）
-							// if strings.Contains(repository, "nginx") || strings.Contains(repository, "node") {
-							// 	fmt.Printf("DEBUG: %s:%s manifest[%d] platform keys: %v\n", repository, tag, i, getMapKeys(platform))
-							// }
-							if os, ok := platform["os"].(string); ok {
-								if arch, ok := platform["architecture"].(string); ok {
-									platforms = append(platforms, fmt.Sprintf("%s/%s", os, arch))
-								}
+							os, osOk := platform["os"].(string)
+							arch, archOk := platform["architecture"].(string)
+							if osOk && archOk && os != "unknown" && arch != "unknown" {
+								platforms = append(platforms, fmt.Sprintf("%s/%s", os, arch))
+							} else {
+								// 不添加无效平台，直接跳过
 							}
+						} else {
+							// 不添加 unknown/unknown，直接跳过
 						}
 					}
 				}
@@ -890,23 +1172,54 @@ func (c *Client) getImagePlatforms(repository, tag string) []string {
 					return platforms
 				}
 			}
-		} else {
-			// 单平台manifest，尝试从config中获取平台信息
+		} else if mediaType == "application/vnd.docker.distribution.manifest.v2+json" || mediaType == "application/vnd.oci.image.manifest.v1+json" {
+			// 单平台manifest（Docker 或 OCI 格式），尝试从config中获取平台信息
 			if config, ok := manifestData["config"].(map[string]interface{}); ok {
 				if platform, ok := config["platform"].(map[string]interface{}); ok {
-												if os, ok := platform["os"].(string); ok {
-								if arch, ok := platform["architecture"].(string); ok {
-									platformStr := fmt.Sprintf("%s/%s", os, arch)
-									return []string{platformStr}
-								}
-							}
+					
+					if os, ok := platform["os"].(string); ok {
+						if arch, ok := platform["architecture"].(string); ok {
+							platformStr := fmt.Sprintf("%s/%s", os, arch)
+							return []string{platformStr}
+						}
+					}
 				}
 			}
 		}
 	}
 	
-	// 如果无法获取平台信息，返回通用平台
-	return []string{"linux/amd64"}
+	// 尝试从其他可能的字段获取平台信息
+	// 有些镜像可能将平台信息放在不同的位置
+	if config, ok := manifestData["config"].(map[string]interface{}); ok {
+		// 尝试从config的其他字段推断平台
+		if os, ok := config["os"].(string); ok {
+			if arch, ok := config["architecture"].(string); ok {
+				return []string{fmt.Sprintf("%s/%s", os, arch)}
+			}
+		}
+	}
+	
+	// 尝试从config blob获取平台信息
+	if config, ok := manifestData["config"].(map[string]interface{}); ok {
+		if digest, ok := config["digest"].(string); ok {
+			// 获取config blob
+			configPlatforms := c.getConfigPlatforms(repository, digest)
+			if len(configPlatforms) > 0 {
+				return configPlatforms
+			}
+		}
+	}
+	
+	// 尝试从layers或其他字段推断平台
+	if layers, ok := manifestData["layers"].([]interface{}); ok && len(layers) > 0 {
+		// 如果无法确定具体平台，但知道有layers，可能是linux平台
+		// 这里可以根据实际情况调整
+		// 注意：不要在这里硬编码平台，让调用者决定如何处理
+		return []string{}
+	}
+	
+	// 如果无法获取平台信息，返回空列表，让调用者决定如何处理
+	return []string{}
 }
 
 // matchesTagPattern 检查标签是否匹配模式
@@ -926,8 +1239,13 @@ func matchesTagPattern(tag, pattern string) bool {
 		var regexPattern string
 		if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
 			// *xxx* -> .*xxx.* (包含xxx)
-			middle := pattern[1 : len(pattern)-1]
-			regexPattern = ".*" + regexp.QuoteMeta(middle) + ".*"
+			if len(pattern) > 2 {
+				middle := pattern[1 : len(pattern)-1]
+				regexPattern = ".*" + regexp.QuoteMeta(middle) + ".*"
+			} else {
+				// 如果模式就是 "*"，匹配所有内容
+				regexPattern = ".*"
+			}
 		} else if strings.HasPrefix(pattern, "*") {
 			// *xxx -> .*xxx$ (以xxx结尾)
 			suffix := pattern[1:]
@@ -967,6 +1285,46 @@ func matchesTagPattern(tag, pattern string) bool {
 	
 	// 没有通配符，使用精确匹配
 	return tag == pattern
+}
+
+// getConfigPlatforms 从config blob获取平台信息
+func (c *Client) getConfigPlatforms(repository, digest string) []string {
+	// 构建API URL获取config blob
+	apiURL := fmt.Sprintf("https://%s/v2/%s/blobs/%s", c.registryURL, repository, digest)
+	
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return []string{}
+	}
+	
+	// 添加认证头
+	auth := base64.StdEncoding.EncodeToString([]byte(c.credentials.Username + ":" + c.credentials.Password))
+	req.Header.Set("Authorization", "Basic "+auth)
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return []string{}
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return []string{}
+	}
+	
+	// 解析config blob
+	var configData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&configData); err != nil {
+		return []string{}
+	}
+	
+	// 从config中获取平台信息
+	if os, ok := configData["os"].(string); ok {
+		if arch, ok := configData["architecture"].(string); ok {
+			return []string{fmt.Sprintf("%s/%s", os, arch)}
+		}
+	}
+	
+	return []string{}
 }
 
 // getMapKeys 获取map的所有键

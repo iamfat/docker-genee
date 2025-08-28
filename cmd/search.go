@@ -33,7 +33,7 @@ func init() {
 	geneeCmd.AddCommand(searchCmd)
 	
 	// 搜索相关标志
-	searchCmd.Flags().StringVar(&platform, "platform", "", "限制搜索的平台 (如: linux/amd64, linux/arm64)")
+	searchCmd.Flags().StringVar(&platform, "platform", "", "限制搜索的平台 (如: linux/amd64, linux/arm64, amd64, arm64)")
 	searchCmd.Flags().IntVar(&limit, "limit", 100, "搜索结果数量限制")
 }
 
@@ -68,9 +68,10 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(w, "REPOSITORY\tTAG\tDIGEST\tPLATFORM\tSIZE\tCREATED")
 	
 	for _, result := range results {
-		platforms := strings.Join(result.Platforms, ", ")
-		if platforms == "" {
-			platforms = "unknown"
+		// 获取真实的平台信息（而不是硬编码的平台列表）
+		platforms := result.Platforms
+		if len(platforms) == 0 {
+			platforms = []string{"unknown"}
 		}
 		
 		// 截断过长的仓库名
@@ -94,11 +95,18 @@ func runSearch(cmd *cobra.Command, args []string) error {
 					tagDisplay = tagDisplay[:17] + "..."
 				}
 				
+				// 为每个标签获取真实的平台信息
+				tagPlatforms := getTagPlatforms(client, result.Name, tag)
+				platformDisplay := strings.Join(tagPlatforms, ", ")
+				if platformDisplay == "" {
+					platformDisplay = "unknown"
+				}
+				
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 					repo,
 					tagDisplay,
 					digest,
-					platforms,
+					platformDisplay,
 					result.Size,
 					result.Created)
 			}
@@ -109,11 +117,18 @@ func runSearch(cmd *cobra.Command, args []string) error {
 				tagDisplay = tagDisplay[:17] + "..."
 			}
 			
+			// 为最新标签获取真实的平台信息
+			tagPlatforms := getTagPlatforms(client, result.Name, result.LatestTag)
+			platformDisplay := strings.Join(tagPlatforms, ", ")
+			if platformDisplay == "" {
+				platformDisplay = "unknown"
+			}
+			
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				repo,
 				tagDisplay,
 				digest,
-				platforms,
+				platformDisplay,
 				result.Size,
 				result.Created)
 		}
@@ -138,4 +153,14 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	
 	return nil
+}
+
+// getTagPlatforms 获取指定标签的真实平台信息
+func getTagPlatforms(client *registry.Client, repository, tag string) []string {
+	// 使用与 images.go 相同的方法获取平台信息
+	platforms := client.GetImagePlatforms(repository, tag)
+	if len(platforms) == 0 {
+		return []string{"unknown"}
+	}
+	return platforms
 }
