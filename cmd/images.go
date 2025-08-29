@@ -51,7 +51,7 @@ func runImages(cmd *cobra.Command, args []string) error {
 	
 	// 使用tabwriter格式化输出
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "REPOSITORY\tTAG\tDIGEST\tPLATFORM\tSIZE\tCREATED")
+	fmt.Fprintln(w, "REPOSITORY\tTAG\tPLATFORM\tCREATED\tSIZE")
 	
 	for _, img := range images {
 		// 截断过长的仓库名
@@ -72,13 +72,12 @@ func runImages(cmd *cobra.Command, args []string) error {
 			platforms = "unknown"
 		}
 		
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			repo,
 			tag,
-			img.Digest[:12], // 只显示前12位
 			platforms,
-			img.Size,
-			img.Created)
+			img.Created,
+			img.Size)
 	}
 	
 	w.Flush()

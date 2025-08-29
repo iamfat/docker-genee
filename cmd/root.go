@@ -10,7 +10,7 @@ import (
 var (
 	registryURL = "docker.genee.cn"
 	configDir   string
-	Version     = "1.0.3"
+	Version     = "1.0.4"
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -58,4 +58,11 @@ func init() {
 	// 全局标志 - 同时添加到 rootCmd 和 geneeCmd
 	rootCmd.PersistentFlags().StringVar(&registryURL, "registry", registryURL, "镜像源地址 (默认: docker.genee.cn)")
 	geneeCmd.PersistentFlags().StringVar(&registryURL, "registry", registryURL, "镜像源地址 (默认: docker.genee.cn)")
+	
+	// 添加版本和帮助标志，确保在genee前缀后也能正常工作
+	rootCmd.Version = Version
+	rootCmd.SetVersionTemplate("docker-genee version {{.Version}}\n")
+	
+	geneeCmd.Version = Version
+	geneeCmd.SetVersionTemplate("docker-genee version {{.Version}}\n")
 }

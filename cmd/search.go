@@ -65,7 +65,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	
 	// 使用tabwriter格式化输出
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "REPOSITORY\tTAG\tDIGEST\tPLATFORM\tSIZE\tCREATED")
+	fmt.Fprintln(w, "REPOSITORY\tTAG\tPLATFORM\tCREATED\tSIZE")
 	
 	for _, result := range results {
 		// 获取真实的平台信息（而不是硬编码的平台列表）
@@ -78,12 +78,6 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		repo := result.Name
 		if len(repo) > 30 {
 			repo = repo[:27] + "..."
-		}
-		
-		// 截断过长的摘要
-		digest := result.Digest
-		if len(digest) > 12 {
-			digest = digest[:12]
 		}
 		
 		// 如果有匹配的标签，为每个标签创建单独的行
@@ -102,13 +96,12 @@ func runSearch(cmd *cobra.Command, args []string) error {
 					platformDisplay = "unknown"
 				}
 				
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 					repo,
 					tagDisplay,
-					digest,
 					platformDisplay,
-					result.Size,
-					result.Created)
+					result.Created,
+					result.Size)
 			}
 		} else {
 			// 没有匹配的标签，显示最新标签
@@ -124,13 +117,12 @@ func runSearch(cmd *cobra.Command, args []string) error {
 				platformDisplay = "unknown"
 			}
 			
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				repo,
 				tagDisplay,
-				digest,
 				platformDisplay,
-				result.Size,
-				result.Created)
+				result.Created,
+				result.Size)
 		}
 	}
 	
